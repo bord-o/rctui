@@ -18,12 +18,6 @@ let style_to_prop = function
   | Ascii -> Ascii
   | Minimal -> Minimal
 
-let style_name = function
-  | Rounded -> "Rounded"
-  | Heavy -> "Heavy"
-  | Double -> "Double"
-  | Ascii -> "ASCII"
-  | Minimal -> "Minimal"
 
 let enabled () =
   let ic = Unix.open_process_in "service -e" in
@@ -87,15 +81,6 @@ let update msg model =
   | Quit -> (model, Cmd.quit)
 
 let w, h = Terminal.size @@ Terminal.open_terminal ()
-let columns =
-  [
-    Table.column ~header:(Table.cell "Service") ~width:(`Fixed (w/4)) ~justify:`Left
-      "service";
-    Table.column ~header:(Table.cell "Enabled") ~width:(`Fixed (w/4)) ~justify:`Right
-      "running";
-    Table.column ~header:(Table.cell "Running") ~width:(`Fixed (w/4)) ~justify:`Right
-      "status";
-  ]
 
 let string_of_running = function
   | Yes -> "Yes"
@@ -120,9 +105,18 @@ let init () =
 
 (* Palette *)
 let footer_bg = Ansi.Color.grayscale ~level:3
-let hint = Ansi.Style.make ~fg:(Ansi.Color.grayscale ~level:14) ()
 
 let view model =
+    let w = fst model.dims in
+    let columns =
+      [
+        Table.column ~header:(Table.cell "Service") ~width:(`Fixed (w/4)) ~justify:`Left
+          "service";
+        Table.column ~header:(Table.cell "Enabled") ~width:(`Fixed (w/4)) ~justify:`Right
+          "running";
+        Table.column ~header:(Table.cell "Running") ~width:(`Fixed (w/4)) ~justify:`Right
+          "status";
+      ] in
   (* let visible_count = 20 in (* adjust based on header/footer space *) *)
   let visible_count = max 1 ((snd model.dims - 6)/2) in
   let scroll_offset =
