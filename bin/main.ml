@@ -4,10 +4,12 @@ open Mosaic_tea
 
 type running = Yes | No | Unknown
 type service_data = { service : string; enabled : bool; running : running }
+
 type box_style = Rounded | Heavy | Double | Ascii | Minimal
-type model = { style : box_style; selected : int; data : service_data list; count : int }
+
+type model = { style : box_style; selected : int; data : service_data list; count : int ;dims : (int * int); tick : int}
 type direction = Up | Down
-type msg = Cycle_style | Quit | Cycle_selected of direction * int
+type msg = Cycle_style | Quit | Cycle_selected of direction * int | Resize of (int * int)
 
 let style_to_prop = function
   | Rounded -> Table.Rounded
@@ -61,6 +63,7 @@ let with_status () =
 
 let update msg model =
   match msg with
+  | Resize dims -> print_endline "resize"; ({model with dims},Cmd.none)
   | Cycle_style ->
       let style =
         match model.style with
@@ -75,21 +78,21 @@ let update msg model =
       let selected =
         if pred model.selected < 0 then pred n else pred model.selected
       in
-      ({ model with selected }, Cmd.none)
+      ({ model with selected; tick=model.tick+1 }, Cmd.none)
   | Cycle_selected (Down, n) ->
       let selected =
         if succ model.selected >= n then 0 else succ model.selected
       in
-      ({ model with selected }, Cmd.none)
+      ({ model with selected; tick=model.tick-1 }, Cmd.none)
   | Quit -> (model, Cmd.quit)
 
 let columns =
   [
     Table.column ~header:(Table.cell "Service") ~width:`Auto ~justify:`Left
       "service";
-    Table.column ~header:(Table.cell "Running") ~width:`Auto ~justify:`Left
+    Table.column ~header:(Table.cell "Enabled") ~width:`Auto ~justify:`Right
       "running";
-    Table.column ~header:(Table.cell "Status") ~width:`Auto ~justify:`Right
+    Table.column ~header:(Table.cell "Running") ~width:`Auto ~justify:`Right
       "status";
   ]
 
@@ -98,38 +101,47 @@ let string_of_running = function
   | No -> "No"
   | Unknown -> "Unknown"
 
-let rec rows_of_data (sd : service_data list) =
-  match sd with
-  | [] -> []
-  | d :: ds ->
-      [
-        Table.cell d.service;
-        Table.cell (d.enabled |> string_of_bool);
-        Table.cell (string_of_running d.running);
-      ]
-      :: rows_of_data ds
+let rows_of_data selected (sd : service_data list) =
+  sd |> List.mapi @@ fun idx d ->
+    let marker = if idx = selected then "► " else "  " in
+    [
+      Table.cell (marker ^ d.service);
+      Table.cell (if d.enabled then "yes" else "no");
+      Table.cell (string_of_running d.running);
+    ]
 
-let data = with_status () 
+let data = with_status ()  |> List.fast_sort (fun a b -> compare b.enabled a.enabled)
+
+let w, h = Terminal.size @@ Terminal.open_terminal ()
+
 let init () =
-  ({ style = Rounded; selected = 0; data; count = List.length data }, Cmd.none)
+    ({ style = Rounded; selected = 0; data; count = List.length data; dims=(w, h); tick=0 }, Cmd.none)
 
-let rows = 
-    (rows_of_data data) 
 
 (* Palette *)
 let footer_bg = Ansi.Color.grayscale ~level:3
 let hint = Ansi.Style.make ~fg:(Ansi.Color.grayscale ~level:14) ()
-let w, h = Terminal.size @@ Terminal.open_terminal ()
 
 let view model =
+  (* let visible_count = 20 in (* adjust based on header/footer space *) *)
+  let visible_count = max 1 ((snd model.dims - 6)/2) in
+  let scroll_offset =
+    if model.selected < visible_count / 2 then 0
+    else if model.selected > model.count - visible_count / 2 then
+      max 0 (model.count - visible_count)
+    else model.selected - visible_count / 2
+  in
+
+  let visible_data =
+    model.data
+    |> List.filteri (fun i _ -> i >= scroll_offset && i < scroll_offset + visible_count)
+  in
 
   let rows =
-    rows |> List.mapi @@ fun idx a ->
-       if idx = model.selected then
-         Table.row
-
-           ~style:(Ansi.Style.make ~bold:true ~bg:Ansi.Color.Magenta ())
-           a
+    (rows_of_data (model.selected - scroll_offset) visible_data) 
+    |> List.mapi @@ fun idx a ->
+       if idx = model.selected - scroll_offset then
+         Table.row ~style:(Ansi.Style.make ~bold:true ~bg:Ansi.Color.Magenta ()) a
        else Table.row a
   in
 
@@ -140,44 +152,41 @@ let view model =
         ~size:{ width = pct 100; height = pct 100 }
         [
           box ~flex_direction:Column ~gap:(gap 2)
+          (* box ~flex_direction:Column ~gap:(gap 2) *)
             ~size:{ width = pct 100; height = pct 100 }
             [
-              (* Table with current style *)
               table ~columns ~rows
-                (* ~key:(string_of_int model.selected) *)
                 ~flex_grow:1.0 ~table_width:w
                 ~box_style:(style_to_prop model.style)
                 ~show_header:true ~show_edge:true ~show_lines:true
-                ~table_padding:(1, 1, 1, 1)
-                ~expand:true (* ~size:{width=pct 100; height=pct 100} *)
-                ~header_style:(Ansi.Style.make ~bold:true ())
-                (* ~row_styles: *)
-                (*   [ *)
-                (*     Ansi.Style.default; *)
-                (*     Ansi.Style.make ~bg:(Ansi.Color.grayscale ~level:3) (); *)
-                (*   ] *)
+                (* ~table_padding:(1, 1, 1, 1) *)
+                ~expand:true
+                ~table_min_width:(w - (model.tick mod 2))
                 ();
-              (* Style indicator *)
-              text ~text_style:hint
-                (Printf.sprintf "Style: %s" (style_name model.style));
-              text ~text_style:hint (Printf.sprintf "idx: %d" model.selected);
             ];
         ];
-      (* Footer *)
-      box ~padding:(padding 1) ~background:footer_bg
-        [ text ~text_style:hint "s cycle style  •  q quit" ];
+      box ~padding:(padding 1) ~background:footer_bg ~flex_direction:Row
+        ~justify_content:Space_between
+        ~size:{ width = pct 100; height = auto }
+        [ 
+          (* text ~text_style:hint "j/k navigate • q quit"; *)
+            (* text ~text_style:hint (Printf.sprintf "h=%d vis=%d rows=%d" (snd model.dims) visible_count (List.length visible_data)); *)
+          (* text ~text_style:hint (Printf.sprintf "%d/%d" (model.selected + 1) model.count); *)
+        ];
     ]
-
 let subscriptions model =
-  Sub.on_key (fun ev ->
-      match (Mosaic_ui.Event.Key.data ev).key with
-      | Char c when Uchar.equal c (Uchar.of_char 's') -> Some Cycle_style
-      | Char c when Uchar.equal c (Uchar.of_char 'j') ->
-          Some (Cycle_selected (Down, model.count))
-      | Char c when Uchar.equal c (Uchar.of_char 'k') ->
-          Some (Cycle_selected (Up, model.count))
-      | Char c when Uchar.equal c (Uchar.of_char 'q') -> Some Quit
-      | Escape -> Some Quit
-      | _ -> None)
+    Sub.batch [
+      Sub.on_key (fun ev ->
+          match (Mosaic_ui.Event.Key.data ev).key with
+          | Char c when Uchar.equal c (Uchar.of_char 's') -> Some Cycle_style
+          | Char c when Uchar.equal c (Uchar.of_char 'j') ->
+              Some (Cycle_selected (Down, model.count))
+          | Char c when Uchar.equal c (Uchar.of_char 'k') ->
+              Some (Cycle_selected (Up, model.count))
+          | Char c when Uchar.equal c (Uchar.of_char 'q') -> Some Quit
+          | Escape -> Some Quit
+          | _ -> None);
+        Sub.on_resize (fun ~width ~height -> Resize (width, height))
+    ]
 
 let () = run { init; update; view; subscriptions }
