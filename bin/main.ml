@@ -86,13 +86,14 @@ let update msg model =
       ({ model with selected; tick=model.tick-1 }, Cmd.none)
   | Quit -> (model, Cmd.quit)
 
+let w, h = Terminal.size @@ Terminal.open_terminal ()
 let columns =
   [
-    Table.column ~header:(Table.cell "Service") ~width:`Auto ~justify:`Left
+    Table.column ~header:(Table.cell "Service") ~width:(`Fixed (w/4)) ~justify:`Left
       "service";
-    Table.column ~header:(Table.cell "Enabled") ~width:`Auto ~justify:`Right
+    Table.column ~header:(Table.cell "Enabled") ~width:(`Fixed (w/4)) ~justify:`Right
       "running";
-    Table.column ~header:(Table.cell "Running") ~width:`Auto ~justify:`Right
+    Table.column ~header:(Table.cell "Running") ~width:(`Fixed (w/4)) ~justify:`Right
       "status";
   ]
 
@@ -112,7 +113,6 @@ let rows_of_data selected (sd : service_data list) =
 
 let data = with_status ()  |> List.fast_sort (fun a b -> compare b.enabled a.enabled)
 
-let w, h = Terminal.size @@ Terminal.open_terminal ()
 
 let init () =
     ({ style = Rounded; selected = 0; data; count = List.length data; dims=(w, h); tick=0 }, Cmd.none)
@@ -151,17 +151,18 @@ let view model =
       box ~flex_grow:1.
         ~size:{ width = pct 100; height = pct 100 }
         [
-          box ~flex_direction:Column ~gap:(gap 2)
+          box ~flex_direction:Column 
           (* box ~flex_direction:Column ~gap:(gap 2) *)
             ~size:{ width = pct 100; height = pct 100 }
             [
               table ~columns ~rows
+                (* ~header_style:(Ansi.Style.make ~bold:true ~fg:(Ansi.Color.grayscale ~level:(23 + (model.tick mod 2))) ()) *)
                 ~flex_grow:1.0 ~table_width:w
                 ~box_style:(style_to_prop model.style)
                 ~show_header:true ~show_edge:true ~show_lines:true
                 (* ~table_padding:(1, 1, 1, 1) *)
                 ~expand:true
-                ~table_min_width:(w - (model.tick mod 2))
+                ~table_min_width:(w - (model.selected mod 2))
                 ();
             ];
         ];
