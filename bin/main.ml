@@ -1,5 +1,3 @@
-(** Data tables with columns, headers, and styling. *)
-
 open Mosaic_tea
 
 type running = Yes | Unknown | No [@@deriving show { with_path = false }]
@@ -14,14 +12,19 @@ type sort_dir = Ascending | Decending [@@deriving show { with_path = false }]
 type sort_by = Enabled of sort_dir | Alpha of sort_dir | Running of sort_dir
 [@@deriving show { with_path = false }]
 
+type mode = Normal | Filtering [@@deriving show { with_path = false }]
+
 type model = {
   selected : int;
+  all_data : service_data list;
   data : service_data list;
   count : int;
   dims : int * int;
   tick : int;
   sort : sort_by;
   last_error : string option;
+  filter : string;
+  mode : mode;
 }
 [@@deriving show { with_path = false }]
 
@@ -33,6 +36,10 @@ type msg =
   | Refresh
   | Enable_service
   | Disable_service
+  | Start_filter
+  | Clear_filter
+  | Exit_filter
+  | Filter_input of string
 [@@deriving show { with_path = false }]
 
 let contains sub s =
@@ -52,10 +59,11 @@ let run_service_cmd s action =
   let ic = Unix.open_process_in cmd in
   let output = In_channel.input_all ic in
   let _ = Unix.close_process_in ic in
-  if String.length output > 0 && 
-     (contains "Permission denied" output || 
-      contains "cannot" output ||
-      contains "error" (String.lowercase_ascii output))
+  if
+    String.length output > 0
+    && (contains "Permission denied" output
+       || contains "cannot" output
+       || contains "error" (String.lowercase_ascii output))
   then Error output
   else Ok ()
 
@@ -72,7 +80,6 @@ let services () =
   let ic = Unix.open_process_in "service -l" in
   let output = In_channel.input_all ic in
   output |> String.trim |> String.split_on_char '\n'
-
 
 let is_running env name =
   let proc_mgr = Eio.Stdenv.process_mgr env in
@@ -117,19 +124,25 @@ let update msg model =
       let selected =
         if pred model.selected < 0 then pred n else pred model.selected
       in
-      ({ model with selected; tick = model.tick + 1; last_error=None }, Cmd.none)
+      ( { model with selected; tick = model.tick + 1; last_error = None },
+        Cmd.none )
   | Cycle_selected (Down, n) ->
       let selected =
         if succ model.selected >= n then 0 else succ model.selected
       in
-      ({ model with selected; tick = model.tick - 1; last_error=None }, Cmd.none)
+      ( { model with selected; tick = model.tick - 1; last_error = None },
+        Cmd.none )
   | Quit -> (model, Cmd.quit)
   | Refresh ->
-      let data =
+      let all_data =
         with_status ()
         |> List.fast_sort (fun a b -> compare b.enabled a.enabled)
       in
-      ({ model with data; count = List.length data }, Cmd.none)
+      let data =
+        if model.filter = "" then all_data
+        else all_data |> List.filter (fun d -> contains model.filter d.service)
+      in
+      ({ model with all_data; data; count = List.length data }, Cmd.none)
   | Cycle_sort ->
       let sort = next_sort model.sort in
       let data =
@@ -160,7 +173,10 @@ let update msg model =
             in
             ({ model with data }, Cmd.none)
         | Error reason ->
-            ( { model with last_error = Some (Format.sprintf "Reason: %s" reason) },
+            ( {
+                model with
+                last_error = Some (Format.sprintf "Reason: %s" reason);
+              },
               Cmd.none ))
   | Disable_service -> (
       let selected_service = List.nth model.data model.selected in
@@ -178,8 +194,31 @@ let update msg model =
             in
             ({ model with data }, Cmd.none)
         | Error reason ->
-            ( { model with last_error = Some (Format.sprintf "Reason: %s" reason) },
+            ( {
+                model with
+                last_error = Some (Format.sprintf "Reason: %s" reason);
+              },
               Cmd.none ))
+  | Start_filter -> ({ model with mode = Filtering; filter = "" }, Cmd.none)
+  | Exit_filter -> ({ model with mode = Normal }, Cmd.none)
+  | Clear_filter ->
+      ( {
+          model with
+          mode = Normal;
+          filter = "";
+          selected = 0;
+          data = model.all_data;
+          count = List.length model.all_data;
+        },
+        Cmd.none )
+  | Filter_input s ->
+      let filtered_data =
+        if s = "" then model.all_data
+        else model.all_data |> List.filter (fun d -> contains s d.service)
+      in
+      let count = List.length filtered_data in
+      ( { model with filter = s; selected = 0; data = filtered_data; count },
+        Cmd.none )
 
 let w, h = Terminal.size @@ Terminal.open_terminal ()
 
@@ -198,18 +237,18 @@ let rows_of_data selected (sd : service_data list) =
        Table.cell (string_of_running d.running);
      ]
 
-let data = []
-(* with_status () |> List.fast_sort (fun a b -> compare b.enabled a.enabled) *)
-
 let init () =
   ( {
       selected = 0;
-      data;
-      count = List.length data;
+      all_data = [];
+      data = [];
+      count = 0;
       dims = (w, h);
       tick = 0;
       sort = Enabled Decending;
       last_error = None;
+      mode = Normal;
+      filter = "";
     },
     Cmd.none )
 
@@ -278,36 +317,59 @@ let view model =
       box ~padding:(padding 1) ~background:footer_bg ~flex_direction:Row
         ~justify_content:Space_between
         ~size:{ width = pct 100; height = auto }
-        [
-          text
-            "j/k navigate • s cycle sort • q quit • e enable • d disable • r \
-             refresh";
-          text
-            (Printf.sprintf "Last Error: %s"
-               (model.last_error |> Option.value ~default:"None"));
-          text
-            (Printf.sprintf "%d/%d %s" (model.selected + 1) model.count
-               (model.sort |> show_sort_by));
-        ];
+        (if model.mode = Filtering then
+           [ text (Format.sprintf "Filter: %s" model.filter) ]
+         else
+           [
+             text
+               "j/k navigate • s cycle sort • q quit • e enable • d disable • \
+                r refresh";
+             text
+               (Printf.sprintf "Last Error: %s"
+                  (model.last_error |> Option.value ~default:"None"));
+             text
+               (Printf.sprintf "%d/%d %s" (model.selected + 1) model.count
+                  (model.sort |> show_sort_by));
+           ]);
     ]
 
 let subscriptions model =
   Sub.batch
     [
       Sub.on_key (fun ev ->
-          match (Mosaic_ui.Event.Key.data ev).key with
-          | Char c when Uchar.equal c (Uchar.of_char 's') -> Some Cycle_sort
-          | Char c when Uchar.equal c (Uchar.of_char 'e') -> Some Enable_service
-          | Char c when Uchar.equal c (Uchar.of_char 'd') ->
-              Some Disable_service
-          | Char c when Uchar.equal c (Uchar.of_char 'j') ->
-              Some (Cycle_selected (Down, model.count))
-          | Char c when Uchar.equal c (Uchar.of_char 'k') ->
-              Some (Cycle_selected (Up, model.count))
-          | Char c when Uchar.equal c (Uchar.of_char 'q') -> Some Quit
-          | Char c when Uchar.equal c (Uchar.of_char 'r') -> Some Refresh
-          | Escape -> Some Quit
-          | _ -> None);
+          match model.mode with
+          | Filtering -> (
+              match (Mosaic_ui.Event.Key.data ev).key with
+              | Escape -> Some Clear_filter
+              | Enter -> Some Exit_filter
+              | Backspace ->
+                  let len = String.length model.filter in
+                  if len > 0 then
+                    Some (Filter_input (String.sub model.filter 0 (len - 1)))
+                  else Some Clear_filter
+              | Char c ->
+                  let ch = Uchar.to_char c in
+                  if ch >= ' ' && ch <= '~' then
+                    Some (Filter_input (model.filter ^ String.make 1 ch))
+                  else None
+              | _ -> None)
+          | Normal -> (
+              match (Mosaic_ui.Event.Key.data ev).key with
+              | Char c when Uchar.equal c (Uchar.of_char '/') ->
+                  Some Start_filter
+              | Char c when Uchar.equal c (Uchar.of_char 's') -> Some Cycle_sort
+              | Char c when Uchar.equal c (Uchar.of_char 'e') ->
+                  Some Enable_service
+              | Char c when Uchar.equal c (Uchar.of_char 'd') ->
+                  Some Disable_service
+              | Char c when Uchar.equal c (Uchar.of_char 'j') ->
+                  Some (Cycle_selected (Down, model.count))
+              | Char c when Uchar.equal c (Uchar.of_char 'k') ->
+                  Some (Cycle_selected (Up, model.count))
+              | Char c when Uchar.equal c (Uchar.of_char 'q') -> Some Quit
+              | Char c when Uchar.equal c (Uchar.of_char 'r') -> Some Refresh
+              | Escape -> Some Clear_filter
+              | _ -> None));
       Sub.on_resize (fun ~width ~height -> Resize (width, height));
     ]
 
