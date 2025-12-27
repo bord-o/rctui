@@ -3,13 +3,22 @@
 open Mosaic_tea
 
 type running = Yes | Unknown | No
+[@@deriving show]
+
 type service_data = { service : string; enabled : bool; running : running }
+[@@deriving show]
+type key = service_data list
+[@@deriving show]
 type direction = Up | Down
+[@@deriving show]
+type sort_dir = Ascending | Decending 
+[@@deriving show]
 
 type sort_by =
-  | Enabled of direction
-  | Alpha of direction
-  | Running of direction
+  | Enabled of sort_dir
+  | Alpha of sort_dir
+  | Running of sort_dir
+[@@deriving show]
 
 type model = {
   selected : int;
@@ -19,6 +28,7 @@ type model = {
   tick : int;
   sort : sort_by;
 }
+[@@deriving show]
 
 type msg =
   | Quit
@@ -26,6 +36,7 @@ type msg =
   | Cycle_sort
   | Resize of (int * int)
   | Refresh
+[@@deriving show]
 
 let enabled () =
   let ic = Unix.open_process_in "service -e" in
@@ -77,12 +88,12 @@ let with_status () =
     services
 
 let next_sort = function
-  | Alpha Up -> Alpha Down
-  | Alpha Down -> Enabled Up
-  | Enabled Up -> Enabled Down
-  | Enabled Down -> Running Up
-  | Running Up -> Running Down
-  | Running Down -> Alpha Up
+  | Alpha Ascending -> Alpha Decending
+  | Alpha Decending -> Enabled Ascending
+  | Enabled Ascending -> Enabled Decending
+  | Enabled Decending -> Running Ascending
+  | Running Ascending -> Running Decending
+  | Running Decending -> Alpha Ascending
 
 let update msg model =
   match msg with
@@ -112,12 +123,12 @@ let update msg model =
         model.data
         |> List.fast_sort (fun a b ->
             match sort with
-            | Enabled Up -> compare b.enabled a.enabled
-            | Enabled Down -> compare a.enabled b.enabled
-            | Alpha Up -> compare b.service a.service
-            | Alpha Down -> compare a.service b.service
-            | Running Up -> compare b.running a.running
-            | Running Down -> compare a.running b.running)
+            | Enabled Ascending -> compare b.enabled a.enabled
+            | Enabled Decending -> compare a.enabled b.enabled
+            | Alpha Ascending -> compare b.service a.service
+            | Alpha Decending -> compare a.service b.service
+            | Running Ascending -> compare b.running a.running
+            | Running Decending -> compare a.running b.running)
       in
       ({ model with sort; data }, Cmd.none)
 
@@ -148,7 +159,7 @@ let init () =
       count = List.length data;
       dims = (w, h);
       tick = 0;
-      sort = Enabled Down;
+      sort = Enabled Decending;
     },
     Cmd.none )
 
@@ -206,7 +217,7 @@ let view model =
             ~size:{ width = pct 100; height = pct 100 }
             [
               table ~columns
-                ~key:(string_of_int (model.count + model.selected))
+                ~key:(show_model model)
                 ~rows ~flex_grow:1.0 ~table_width:w ~box_style:Minimal
                 ~show_header:true ~show_edge:true
                 ~show_lines:true (* ~table_padding:(1, 1, 1, 1) *)
@@ -219,7 +230,8 @@ let view model =
         ~justify_content:Space_between
         ~size:{ width = pct 100; height = auto }
         [
-          text "j/k navigate • q quit • e enable • d disable • r refresh";
+          text "j/k navigate • s cycle sort • q quit • e enable • d disable • r refresh";
+          text (Printf.sprintf "%s" (model.sort |> show_sort_by));
           text (Printf.sprintf "%d/%d" (model.selected + 1) model.count);
         ];
     ]
