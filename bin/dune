@@ -1,4 +1,4 @@
 (executable
  (public_name rctui)
  (name main)
- (libraries rctui mosaic.tea mosaic.ui matrix.ansi str))
+ (libraries rctui mosaic.tea mosaic.ui matrix.ansi str eio_main eio))

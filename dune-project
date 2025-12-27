@@ -4,11 +4,15 @@
 
 (pin
  (url "git+https://github.com/tmattio/mosaic.git")
- (package (name mosaic))
- (package (name matrix))
- (package (name toffee))
- )
+ (package
+  (name toffee)))
 
+(pin
+ (url "../mosaic")
+ (package
+  (name mosaic))
+ (package
+  (name matrix)))
 
 (generate_opam_files true)
 
@@ -27,7 +31,7 @@
  (name rctui)
  (synopsis "A short synopsis")
  (description "A longer description")
- (depends ocaml mosaic)
+ (depends ocaml mosaic eio_main)
  (tags
   ("add topics" "to describe" your project)))
 
