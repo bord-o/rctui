@@ -2,5 +2,5 @@
  (public_name rctui)
  (name main)
  (preprocess
-   (pps ppx_deriving.show))
+  (pps ppx_deriving.show))
  (libraries rctui mosaic.tea mosaic.ui matrix.ansi str eio_main eio))

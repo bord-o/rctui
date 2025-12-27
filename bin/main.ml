@@ -2,23 +2,17 @@
 
 open Mosaic_tea
 
-type running = Yes | Unknown | No
-[@@deriving show]
+type running = Yes | Unknown | No [@@deriving show { with_path = false }]
 
 type service_data = { service : string; enabled : bool; running : running }
-[@@deriving show]
-type key = service_data list
-[@@deriving show]
-type direction = Up | Down
-[@@deriving show]
-type sort_dir = Ascending | Decending 
-[@@deriving show]
+[@@deriving show { with_path = false }]
 
-type sort_by =
-  | Enabled of sort_dir
-  | Alpha of sort_dir
-  | Running of sort_dir
-[@@deriving show]
+type key = service_data list [@@deriving show { with_path = false }]
+type direction = Up | Down [@@deriving show { with_path = false }]
+type sort_dir = Ascending | Decending [@@deriving show { with_path = false }]
+
+type sort_by = Enabled of sort_dir | Alpha of sort_dir | Running of sort_dir
+[@@deriving show { with_path = false }]
 
 type model = {
   selected : int;
@@ -27,8 +21,9 @@ type model = {
   dims : int * int;
   tick : int;
   sort : sort_by;
+  last_error : string option;
 }
-[@@deriving show]
+[@@deriving show { with_path = false }]
 
 type msg =
   | Quit
@@ -36,18 +31,9 @@ type msg =
   | Cycle_sort
   | Resize of (int * int)
   | Refresh
-[@@deriving show]
-
-let enabled () =
-  let ic = Unix.open_process_in "service -e" in
-  let output = In_channel.input_all ic in
-  output |> String.trim |> String.split_on_char '\n'
-  |> List.map (fun s -> Filename.basename s)
-
-let services () =
-  let ic = Unix.open_process_in "service -l" in
-  let output = In_channel.input_all ic in
-  output |> String.trim |> String.split_on_char '\n'
+  | Enable_service
+  | Disable_service
+[@@deriving show { with_path = false }]
 
 let contains sub s =
   let len_sub = String.length sub in
@@ -60,6 +46,33 @@ let contains sub s =
       else check (i + 1)
     in
     check 0
+
+let run_service_cmd s action =
+  let cmd = Format.sprintf "service %s %s 2>&1" s action in
+  let ic = Unix.open_process_in cmd in
+  let output = In_channel.input_all ic in
+  let _ = Unix.close_process_in ic in
+  if String.length output > 0 && 
+     (contains "Permission denied" output || 
+      contains "cannot" output ||
+      contains "error" (String.lowercase_ascii output))
+  then Error output
+  else Ok ()
+
+let enable_service s = run_service_cmd s "enable"
+let disable_service s = run_service_cmd s "disable"
+
+let enabled () =
+  let ic = Unix.open_process_in "service -e" in
+  let output = In_channel.input_all ic in
+  output |> String.trim |> String.split_on_char '\n'
+  |> List.map (fun s -> Filename.basename s)
+
+let services () =
+  let ic = Unix.open_process_in "service -l" in
+  let output = In_channel.input_all ic in
+  output |> String.trim |> String.split_on_char '\n'
+
 
 let is_running env name =
   let proc_mgr = Eio.Stdenv.process_mgr env in
@@ -104,12 +117,12 @@ let update msg model =
       let selected =
         if pred model.selected < 0 then pred n else pred model.selected
       in
-      ({ model with selected; tick = model.tick + 1 }, Cmd.none)
+      ({ model with selected; tick = model.tick + 1; last_error=None }, Cmd.none)
   | Cycle_selected (Down, n) ->
       let selected =
         if succ model.selected >= n then 0 else succ model.selected
       in
-      ({ model with selected; tick = model.tick - 1 }, Cmd.none)
+      ({ model with selected; tick = model.tick - 1; last_error=None }, Cmd.none)
   | Quit -> (model, Cmd.quit)
   | Refresh ->
       let data =
@@ -131,6 +144,42 @@ let update msg model =
             | Running Decending -> compare a.running b.running)
       in
       ({ model with sort; data }, Cmd.none)
+  | Enable_service -> (
+      let selected_service = List.nth model.data model.selected in
+      if selected_service.enabled then
+        ({ model with last_error = Some "Already enabled" }, Cmd.none)
+      else
+        match enable_service selected_service.service with
+        | Ok () ->
+            let data =
+              model.data
+              |> List.map @@ fun d ->
+                 if d.service = selected_service.service then
+                   { d with enabled = true; running = Unknown }
+                 else d
+            in
+            ({ model with data }, Cmd.none)
+        | Error reason ->
+            ( { model with last_error = Some (Format.sprintf "Reason: %s" reason) },
+              Cmd.none ))
+  | Disable_service -> (
+      let selected_service = List.nth model.data model.selected in
+      if not selected_service.enabled then
+        ({ model with last_error = Some "Already disabled" }, Cmd.none)
+      else
+        match disable_service selected_service.service with
+        | Ok () ->
+            let data =
+              model.data
+              |> List.map @@ fun d ->
+                 if d.service = selected_service.service then
+                   { d with enabled = false; running = No }
+                 else d
+            in
+            ({ model with data }, Cmd.none)
+        | Error reason ->
+            ( { model with last_error = Some (Format.sprintf "Reason: %s" reason) },
+              Cmd.none ))
 
 let w, h = Terminal.size @@ Terminal.open_terminal ()
 
@@ -160,6 +209,7 @@ let init () =
       dims = (w, h);
       tick = 0;
       sort = Enabled Decending;
+      last_error = None;
     },
     Cmd.none )
 
@@ -216,10 +266,9 @@ let view model =
             ~flex_direction:Column (* box ~flex_direction:Column ~gap:(gap 2) *)
             ~size:{ width = pct 100; height = pct 100 }
             [
-              table ~columns
-                ~key:(show_model model)
-                ~rows ~flex_grow:1.0 ~table_width:w ~box_style:Minimal
-                ~show_header:true ~show_edge:true
+              table ~columns ~key:(show_model model) ~rows ~flex_grow:1.0
+                ~table_width:w ~box_style:Minimal ~show_header:true
+                ~show_edge:true
                 ~show_lines:true (* ~table_padding:(1, 1, 1, 1) *)
                 ~expand:true
                 (* ~table_min_width:(w - (model.selected mod 2)) *)
@@ -230,9 +279,15 @@ let view model =
         ~justify_content:Space_between
         ~size:{ width = pct 100; height = auto }
         [
-          text "j/k navigate • s cycle sort • q quit • e enable • d disable • r refresh";
-          text (Printf.sprintf "%s" (model.sort |> show_sort_by));
-          text (Printf.sprintf "%d/%d" (model.selected + 1) model.count);
+          text
+            "j/k navigate • s cycle sort • q quit • e enable • d disable • r \
+             refresh";
+          text
+            (Printf.sprintf "Last Error: %s"
+               (model.last_error |> Option.value ~default:"None"));
+          text
+            (Printf.sprintf "%d/%d %s" (model.selected + 1) model.count
+               (model.sort |> show_sort_by));
         ];
     ]
 
@@ -242,6 +297,9 @@ let subscriptions model =
       Sub.on_key (fun ev ->
           match (Mosaic_ui.Event.Key.data ev).key with
           | Char c when Uchar.equal c (Uchar.of_char 's') -> Some Cycle_sort
+          | Char c when Uchar.equal c (Uchar.of_char 'e') -> Some Enable_service
+          | Char c when Uchar.equal c (Uchar.of_char 'd') ->
+              Some Disable_service
           | Char c when Uchar.equal c (Uchar.of_char 'j') ->
               Some (Cycle_selected (Down, model.count))
           | Char c when Uchar.equal c (Uchar.of_char 'k') ->
