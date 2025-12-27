@@ -250,7 +250,7 @@ let init () =
       mode = Normal;
       filter = "";
     },
-    Cmd.none )
+    Cmd.perform @@ fun disp -> disp Refresh )
 
 (* Palette *)
 let footer_bg = Ansi.Color.grayscale ~level:3
